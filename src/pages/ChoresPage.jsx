@@ -63,6 +63,9 @@ export default function ChoresPage() {
 
   const [name, setName] = useState('')
   const [assignee, setAssignee] = useState('Me')
+  const [editingId, setEditingId] = useState(null)
+  const [draftName, setDraftName] = useState('')
+  const [draftAssignee, setDraftAssignee] = useState('Me')
 
   const pending = useMemo(
     () => chores.filter((c) => !c.done).sort((a, b) => b.createdAt - a.createdAt),
@@ -98,6 +101,7 @@ export default function ChoresPage() {
   }
 
   function toggleDone(id) {
+    if (editingId === id) setEditingId(null)
     const next = chores.map((c) => {
       if (c.id !== id) return c
       const nextDone = !c.done
@@ -106,7 +110,13 @@ export default function ChoresPage() {
     persist(next)
   }
 
+  function updateChore(id, patch) {
+    const next = chores.map((c) => (c.id === id ? { ...c, ...patch } : c))
+    persist(next)
+  }
+
   function removeChore(id) {
+    if (editingId === id) setEditingId(null)
     persist(chores.filter((c) => c.id !== id))
   }
 
@@ -206,6 +216,7 @@ export default function ChoresPage() {
                   <button
                     type="button"
                     onClick={() => toggleDone(c.id)}
+                    disabled={editingId === c.id}
                     className="mt-0.5 grid h-6 w-6 place-items-center rounded-full border border-slate-300 bg-white transition hover:border-emerald-400"
                     aria-label={`Mark ${c.name} complete`}
                   >
@@ -213,20 +224,101 @@ export default function ChoresPage() {
                   </button>
 
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-900">{c.name}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Assigned to <span className="font-semibold text-slate-700">{c.assignee}</span>
-                    </p>
+                    {editingId === c.id ? (
+                      <div className="grid gap-2">
+                        <label className="block">
+                          <span className="sr-only">Edit chore name</span>
+                          <input
+                            value={draftName}
+                            onChange={(e) => setDraftName(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="sr-only">Edit assignee</span>
+                          <div className="relative">
+                            <User
+                              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                              aria-hidden="true"
+                            />
+                            <select
+                              value={draftAssignee}
+                              onChange={(e) => setDraftAssignee(e.target.value)}
+                              className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-2 pl-10 pr-9 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                            >
+                              {ASSIGNEES.map((a) => (
+                                <option key={a} value={a}>
+                                  {a}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">▾</div>
+                          </div>
+                        </label>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const trimmed = draftName.trim()
+                              if (!trimmed) return
+                              updateChore(c.id, { name: trimmed, assignee: draftAssignee })
+                              setEditingId(null)
+                            }}
+                            disabled={!draftName.trim()}
+                            className={[
+                              'inline-flex items-center rounded-xl px-3 py-1.5 text-xs font-semibold shadow-sm transition',
+                              draftName.trim()
+                                ? 'bg-slate-900 text-white hover:bg-slate-800'
+                                : 'bg-slate-200 text-slate-500 cursor-not-allowed',
+                            ].join(' ')}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingId(null)}
+                            className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="truncate text-sm font-semibold text-slate-900">{c.name}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Assigned to <span className="font-semibold text-slate-700">{c.assignee}</span>
+                        </p>
+                      </>
+                    )}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => removeChore(c.id)}
-                    className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                    aria-label={`Delete ${c.name}`}
-                  >
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    {editingId !== c.id && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(c.id)
+                          setDraftName(c.name)
+                          setDraftAssignee(c.assignee)
+                        }}
+                        className="rounded-xl px-2 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                        aria-label={`Edit ${c.name}`}
+                      >
+                        Edit
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeChore(c.id)}
+                      className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                      aria-label={`Delete ${c.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
               ))
             )}
