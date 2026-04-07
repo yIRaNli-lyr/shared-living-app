@@ -62,3 +62,10 @@ export function canRemoveHouseholdMember(name, currentUsername, roster, choresKe
   if (!roster.includes(name)) return false
   return !memberIsInUse(name, choresKey, billsKey, roster)
 }
+
+/** True if the roster includes anyone other than the current user (case-insensitive). */
+export function hasOtherHouseholdMembers(roster, currentUsername) {
+  const u = String(currentUsername || '').trim().toLowerCase()
+  if (!u) return false
+  return roster.some((m) => String(m).trim().toLowerCase() !== u)
+}

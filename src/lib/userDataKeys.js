@@ -1,10 +1,12 @@
 /**
- * Per-user localStorage key suffix. Demo keeps legacy keys (no suffix) so existing demo data still loads.
+ * Demo: unsuffixed keys (demo session only).
+ * Signed-in users: per-account keys so registration does not merge everyone into one household
+ * on the same browser. Household membership is whatever that account’s roster contains.
  */
 export function userDataKeys(currentUser) {
   const isDemo = Boolean(currentUser?.isDemo)
-  const username = typeof currentUser?.username === 'string' ? currentUser.username : ''
-  const suffix = isDemo ? '' : `.user.${encodeURIComponent(username)}`
+  const u = String(currentUser?.username || '').trim()
+  const suffix = isDemo ? '' : `.user.${encodeURIComponent(u)}`
 
   return {
     isDemo,
@@ -12,5 +14,6 @@ export function userDataKeys(currentUser) {
     bills: `slmvp.bills.v1${suffix}`,
     rules: `slmvp.rules.v1${suffix}`,
     members: `slmvp.members.v1${suffix}`,
+    householdMeta: `slmvp.household.meta.v1${suffix}`,
   }
 }

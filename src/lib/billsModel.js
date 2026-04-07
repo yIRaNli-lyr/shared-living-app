@@ -51,7 +51,7 @@ export function normalizeBill(input, roster) {
     participantsCount = splitType === 'even' ? Math.min(3, Math.max(1, list.length)) : 0
   }
   if (splitType === 'even' && list.length) {
-    participantsCount = Math.min(participantsCount, list.length)
+    participantsCount = list.length
   }
   const payerRaw = typeof input.payer === 'string' ? input.payer.trim() : ''
   const payer = list.includes(payerRaw) ? payerRaw : fallback

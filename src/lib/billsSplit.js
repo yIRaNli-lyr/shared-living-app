@@ -38,6 +38,23 @@ export function parseCustomSplit(notes, totalAmount) {
   return items.map((i) => ({ name: i.name, share: totalAmount * (i.w / sum) }))
 }
 
+/** Split `amount` evenly across `roster` (every member gets a share; cents distributed without drift). */
+export function evenSplitAmongRoster(amount, roster) {
+  const list = Array.isArray(roster) && roster.length ? roster : []
+  if (!list.length) return []
+  const cents = Math.round(Number(amount) * 100)
+  if (!Number.isFinite(cents) || cents < 0) {
+    return list.map((name) => ({ name, share: 0 }))
+  }
+  const n = list.length
+  const base = Math.floor(cents / n)
+  const rem = cents - base * n
+  return list.map((name, i) => ({
+    name,
+    share: (base + (i < rem ? 1 : 0)) / 100,
+  }))
+}
+
 /** Serialize percent rows for storage (must sum to 100 for UI validation). */
 export function formatCustomSplitPercents(rows) {
   const parts = []
@@ -53,7 +70,7 @@ export function formatCustomSplitPercents(rows) {
 
 /**
  * @param {object} b - bill with splitType, participantsCount, splitNotes, amount
- * @param {string[]} roster - ordered household members (first = logged-in user)
+ * @param {string[]} roster - household members (order preserved)
  */
 export function sharesForBill(b, roster) {
   const amount = b.amount
@@ -65,7 +82,5 @@ export function sharesForBill(b, roster) {
     const per = amount / n
     return list.slice(0, n).map((name) => ({ name, share: per }))
   }
-  const n = Math.min(Math.max(1, b.participantsCount), list.length)
-  const per = amount / n
-  return list.slice(0, n).map((name) => ({ name, share: per }))
+  return evenSplitAmongRoster(amount, list)
 }

@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, CreditCard, HandCoins, Plus, Receipt, ShieldCheck, Trash2, Upload, X } from 'lucide-react'
+import {
+  buildSettlementInsights,
+  debtorSharesForBill,
+  fmtAmountPlain,
+  formatNetMoney,
+} from '../lib/billSettlement'
 import { BILL_CATEGORIES, categoryToTone, DEFAULT_BILLS, normalizeBill } from '../lib/billsModel'
-import { formatCustomSplitPercents, parseCustomSplitItems, sharesForBill } from '../lib/billsSplit'
+import { formatCustomSplitPercents, parseCustomSplitItems } from '../lib/billsSplit'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 
 function Card({ children, className = '' }) {
@@ -173,102 +179,14 @@ function CustomSplitCardSummary({ notes }) {
   )
 }
 
-/** Net balance: payer +full amount; each participant −their share. Positive = owed back, negative = owes. */
-function balanceDeltasFromBills(bills, roster) {
-  const delta = new Map()
-  const add = (name, v) => {
-    if (!name || typeof v !== 'number' || !Number.isFinite(v)) return
-    const k = String(name).trim()
-    if (!k) return
-    delta.set(k, (delta.get(k) || 0) + v)
-  }
-
-  const list = Array.isArray(roster) && roster.length ? roster : ['']
-  for (const b of bills) {
-    const payer = b.payer || list[0] || ''
-    add(payer, b.amount)
-    for (const { name, share } of sharesForBill(b, roster)) {
-      add(name, -share)
-    }
-  }
-  return delta
-}
-
-function balanceSortKey(a, b, roster) {
-  const list = Array.isArray(roster) ? roster : []
-  const ia = list.indexOf(a)
-  const ib = list.indexOf(b)
-  if (ia !== -1 && ib !== -1) return ia - ib
-  if (ia !== -1) return -1
-  if (ib !== -1) return 1
-  return a.localeCompare(b)
-}
-
-function formatNetMoney(net) {
-  const rounded = Math.round(net * 100) / 100
-  const sign = rounded >= 0 ? '+' : '-'
-  const abs = Math.abs(rounded)
-  return `${sign}$${abs.toFixed(2)}`
-}
-
-function fmtAmountPlain(v) {
-  const n = Math.round(Number(v) * 100) / 100
-  return `$${n.toFixed(2)}`
-}
-
-/** Shares owed to the payer (everyone in the split except the person who paid). */
-function debtorSharesForBill(b, roster) {
-  const payer = b.payer || (roster.length ? roster[0] : '')
-  return sharesForBill(b, roster).filter((s) => s.name !== payer && s.share >= 0.005)
-}
-
-function buildSettlementInsights(bills, roster, me) {
-  const empty = {
-    receivePending: 0,
-    payPending: 0,
-    receiveFrom: /** @type {{ who: string, amount: number }[]} */ ([]),
-    payTo: /** @type {{ who: string, amount: number }[]} */ ([]),
-    netForMe: 0,
-  }
-  if (!me || !roster.length) return empty
-  const delta = balanceDeltasFromBills(bills, roster)
-  const netForMe = delta.get(me) || 0
-  const receiveMap = new Map()
-  const payMap = new Map()
-  let receivePending = 0
-  let payPending = 0
-  for (const b of bills) {
-    const payer = b.payer || roster[0] || ''
-    const settled = new Set(b.settledShares || [])
-    for (const { name, share } of sharesForBill(b, roster)) {
-      if (share < 0.005 || name === payer) continue
-      if (settled.has(name)) continue
-      if (payer === me && name !== me) {
-        receivePending += share
-        receiveMap.set(name, (receiveMap.get(name) || 0) + share)
-      }
-      if (name === me && payer !== me) {
-        payPending += share
-        payMap.set(payer, (payMap.get(payer) || 0) + share)
-      }
-    }
-  }
-  const receiveFrom = [...receiveMap.entries()]
-    .map(([who, amount]) => ({ who, amount }))
-    .sort((a, b) => balanceSortKey(a.who, b.who, roster))
-  const payTo = [...payMap.entries()]
-    .map(([who, amount]) => ({ who, amount }))
-    .sort((a, b) => balanceSortKey(a.who, b.who, roster))
-  return { receivePending, payPending, receiveFrom, payTo, netForMe }
-}
-
-function splitSummaryEven(b) {
-  const n = b.participantsCount
+function splitSummaryEvenLabel(roster) {
+  const n = Array.isArray(roster) && roster.length ? roster.length : 0
+  if (n < 1) return 'Even split'
   const label = n === 1 ? 'person' : 'people'
-  return `Even split · ${n} ${label}`
+  return `Even split · all ${n} household ${label}`
 }
 
-export default function BillsPage({ storageKey, isDemo, members }) {
+export default function BillsPage({ storageKey, isDemo, members, currentUsername }) {
   /** One list for the whole page: same source as App `members`, stable reference while names/order unchanged. */
   const householdMembersKey =
     Array.isArray(members) && members.length ? members.join('\u0001') : ''
@@ -284,23 +202,7 @@ export default function BillsPage({ storageKey, isDemo, members }) {
     return raw.map((b) => normalizeBill(b, householdMembers)).filter((b) => b && b.title)
   }, [stored, householdMembers])
 
-  const balanceRows = useMemo(() => {
-    const delta = balanceDeltasFromBills(bills, householdMembers)
-    const names = new Set([...householdMembers, ...delta.keys()])
-    return [...names]
-      .filter((who) => Math.abs(delta.get(who) || 0) >= 0.005)
-      .sort((a, b) => balanceSortKey(a, b, householdMembers))
-      .map((who) => {
-        const net = delta.get(who) || 0
-        return {
-          who,
-          amount: formatNetMoney(net),
-          tone: net >= 0 ? 'text-emerald-700' : 'text-rose-700',
-        }
-      })
-  }, [bills, householdMembers])
-
-  const me = householdMembers[0] || ''
+  const me = String(currentUsername || '').trim()
   const settlementForYou = useMemo(
     () => buildSettlementInsights(bills, householdMembers, me),
     [bills, householdMembers, me],
@@ -315,7 +217,6 @@ export default function BillsPage({ storageKey, isDemo, members }) {
   const [receiptFileName, setReceiptFileName] = useState('')
   const receiptFileInputRef = useRef(null)
   const [splitType, setSplitType] = useState('even')
-  const [participantsCount, setParticipantsCount] = useState('3')
   const [customRows, setCustomRows] = useState([])
   const [payer, setPayer] = useState('')
 
@@ -393,12 +294,8 @@ export default function BillsPage({ storageKey, isDemo, members }) {
     const amountNum = parseFloat(amount)
     if (!Number.isFinite(amountNum) || amountNum < 0) return
     const normalizedSplit = splitType === 'custom' ? 'custom' : 'even'
-    let pc = 3
-    if (normalizedSplit === 'even') {
-      pc = parseInt(participantsCount, 10)
-      if (!Number.isFinite(pc) || pc < 1) return
-      if (householdMembers.length) pc = Math.min(pc, householdMembers.length)
-    }
+    const pc = normalizedSplit === 'even' ? Math.max(1, householdMembers.length) : 0
+    if (normalizedSplit === 'even' && !householdMembers.length) return
     let splitNotesStored = ''
     if (normalizedSplit === 'custom') {
       if (!isCustomRowsValid(customRows, householdMembers)) return
@@ -430,7 +327,6 @@ export default function BillsPage({ storageKey, isDemo, members }) {
     setCategory('utilities')
     clearReceiptForm()
     setSplitType('even')
-    setParticipantsCount(String(Math.min(3, Math.max(1, householdMembers.length || 3))))
     setCustomRows([])
     setPayer(householdMembers[0] || '')
   }
@@ -450,11 +346,7 @@ export default function BillsPage({ storageKey, isDemo, members }) {
 
   const addDisabledBase =
     !title.trim() || amount === '' || !Number.isFinite(parseFloat(amount)) || parseFloat(amount) < 0
-  const addDisabledEven =
-    splitType === 'even' &&
-    (!participantsCount.trim() ||
-      !Number.isFinite(parseInt(participantsCount, 10)) ||
-      parseInt(participantsCount, 10) < 1)
+  const addDisabledEven = splitType === 'even' && householdMembers.length === 0
   const addDisabledCustom = splitType === 'custom' && !isCustomRowsValid(customRows, householdMembers)
   const addDisabled = addDisabledBase || addDisabledEven || addDisabledCustom
 
@@ -590,7 +482,7 @@ export default function BillsPage({ storageKey, isDemo, members }) {
 
               <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4 sm:p-5">
                 <p className={`${fieldLabelClass} text-slate-700`}>Split & pay</p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <label className="block sm:col-span-2 lg:col-span-1">
                     <span className="mb-1 block text-xs font-medium text-slate-500">Paid by</span>
                     <select
@@ -618,19 +510,6 @@ export default function BillsPage({ storageKey, isDemo, members }) {
                     </select>
                   </label>
 
-                  {splitType === 'even' ? (
-                    <label className="block sm:col-span-2 lg:col-span-2">
-                      <span className="mb-1 block text-xs font-medium text-slate-500">Participants</span>
-                      <input
-                        value={participantsCount}
-                        onChange={(e) => setParticipantsCount(e.target.value)}
-                        inputMode="numeric"
-                        min={1}
-                        placeholder="Number of people"
-                        className={fieldInputClass}
-                      />
-                    </label>
-                  ) : null}
                 </div>
 
                 {splitType === 'even' ? null : (
@@ -813,7 +692,7 @@ export default function BillsPage({ storageKey, isDemo, members }) {
                     {b.splitType === 'custom' ? (
                       <CustomSplitCardSummary notes={b.splitNotes} />
                     ) : (
-                      <p className="mt-2 text-xs text-slate-500">{splitSummaryEven(b)}</p>
+                      <p className="mt-2 text-xs text-slate-500">{splitSummaryEvenLabel(householdMembers)}</p>
                     )}
                     <p className="mt-1 text-xs text-slate-500">
                       Paid by <span className="font-semibold text-slate-700">{b.payer}</span>
@@ -869,8 +748,12 @@ export default function BillsPage({ storageKey, isDemo, members }) {
         <Card>
           <h3 className="text-lg font-semibold tracking-tight text-slate-900">Balances & settlement</h3>
           <p className="mt-1 text-sm text-slate-600">
-            Net totals include all bills. Pending amounts are shares not yet marked paid on each bill (you vs roommates).
+            Net totals reflect paid shares: the payer fronts the bill; others owe their share until marked paid. Pending
+            lines are amounts not yet settled on each bill.
           </p>
+          {bills.length === 0 ? (
+            <p className="mt-3 text-sm text-slate-600">Add bills to see pending collection, payment, and net balances.</p>
+          ) : null}
 
           {me ? (
             <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -900,7 +783,11 @@ export default function BillsPage({ storageKey, isDemo, members }) {
           <div className="mt-4">
             <p className="text-sm font-semibold text-slate-900">Pending by person</p>
             {settlementForYou.receiveFrom.length === 0 && settlementForYou.payTo.length === 0 ? (
-              <p className="mt-2 text-sm text-slate-600">No pending settlement items. Mark shares on each bill as needed.</p>
+              <p className="mt-2 text-sm text-slate-600">
+                {bills.length === 0
+                  ? 'No bills yet.'
+                  : 'No pending settlement for you — all tracked shares are marked paid, or you are not on a split for these bills.'}
+              </p>
             ) : (
               <ul className="mt-2 space-y-2">
                 {settlementForYou.receiveFrom.map(({ who, amount }) => (
@@ -935,24 +822,6 @@ export default function BillsPage({ storageKey, isDemo, members }) {
                 ))}
               </ul>
             )}
-          </div>
-
-          <div className="mt-6">
-            <p className="text-sm font-semibold text-slate-900">Net by person</p>
-            <div className="mt-2 space-y-2">
-              {balanceRows.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-sm text-slate-600">
-                  No net balances yet. Add a bill to see who paid and who owes.
-                </div>
-              ) : (
-                balanceRows.map((row) => (
-                  <div key={row.who} className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3">
-                    <p className="text-sm font-semibold text-slate-900">{row.who}</p>
-                    <p className={['text-sm font-semibold', row.tone].join(' ')}>{row.amount}</p>
-                  </div>
-                ))
-              )}
-            </div>
           </div>
         </Card>
 
