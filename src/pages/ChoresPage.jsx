@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Circle, Plus, Trash2, User } from 'lucide-react'
+import { DEFAULT_CHORES, normalizeChore } from '../lib/choresModel'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 
 function Card({ children, className = '' }) {
@@ -18,51 +19,42 @@ function IconBadge({ children, className = '' }) {
   )
 }
 
-const STORAGE_KEY = 'slmvp.chores.v1'
-const ASSIGNEES = ['Me', 'Roommate A', 'Roommate B']
-
 function makeId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
   return `id_${Math.random().toString(16).slice(2)}_${Date.now()}`
 }
 
-function normalizeChore(input) {
-  if (!input || typeof input !== 'object') return null
-  const name = typeof input.name === 'string' ? input.name : ''
-  const assignee = typeof input.assignee === 'string' ? input.assignee : 'Me'
-  const done = Boolean(input.done)
-  const id = typeof input.id === 'string' ? input.id : makeId()
-  const createdAt = typeof input.createdAt === 'number' ? input.createdAt : Date.now()
-  const doneAt = typeof input.doneAt === 'number' ? input.doneAt : null
-  return {
-    id,
-    name: name.trim(),
-    assignee: ASSIGNEES.includes(assignee) ? assignee : 'Me',
-    done,
-    createdAt,
-    doneAt: done ? (doneAt ?? Date.now()) : null,
-  }
-}
-
-const DEFAULT_CHORES = [
-  { id: 'seed_1', name: 'Trash & recycling', assignee: 'Roommate A', done: false, createdAt: Date.now() - 86400000 },
-  { id: 'seed_2', name: 'Kitchen reset', assignee: 'Me', done: false, createdAt: Date.now() - 3600000 },
-  { id: 'seed_3', name: 'Bathroom wipe-down', assignee: 'Roommate B', done: true, createdAt: Date.now() - 172800000, doneAt: Date.now() - 7200000 },
-]
-
-export default function ChoresPage() {
-  const [stored, setStored] = useLocalStorageState(STORAGE_KEY, DEFAULT_CHORES)
+export default function ChoresPage({ storageKey, isDemo, members, focusAddFormNonce = 0 }) {
+  const roster = Array.isArray(members) && members.length ? members : []
+  const [stored, setStored] = useLocalStorageState(storageKey, isDemo ? DEFAULT_CHORES : [])
+  const nameInputRef = useRef(null)
 
   const chores = useMemo(() => {
     const raw = Array.isArray(stored) ? stored : []
-    const normalized = raw.map(normalizeChore).filter(Boolean)
+    const normalized = raw.map((c) => normalizeChore(c, roster)).filter(Boolean)
+    if (!isDemo) return normalized
     const hasSeed = normalized.some((c) => String(c.id).startsWith('seed_'))
-    if (normalized.length === 0 && !hasSeed) return DEFAULT_CHORES.map(normalizeChore).filter(Boolean)
+    if (normalized.length === 0 && !hasSeed) return DEFAULT_CHORES.map((c) => normalizeChore(c, roster)).filter(Boolean)
     return normalized
-  }, [stored])
+  }, [stored, isDemo, roster])
 
   const [name, setName] = useState('')
-  const [assignee, setAssignee] = useState('Me')
+  const [assignee, setAssignee] = useState('')
+  const [editingId, setEditingId] = useState(null)
+  const [draftName, setDraftName] = useState('')
+  const [draftAssignee, setDraftAssignee] = useState('')
+
+  useEffect(() => {
+    if (roster.length > 0 && !roster.includes(assignee)) setAssignee(roster[0])
+  }, [roster, assignee])
+
+  useEffect(() => {
+    if (roster.length > 0 && !roster.includes(draftAssignee)) setDraftAssignee(roster[0])
+  }, [roster, draftAssignee])
+
+  useEffect(() => {
+    if (focusAddFormNonce > 0) nameInputRef.current?.focus()
+  }, [focusAddFormNonce])
 
   const pending = useMemo(
     () => chores.filter((c) => !c.done).sort((a, b) => b.createdAt - a.createdAt),
@@ -94,10 +86,11 @@ export default function ChoresPage() {
     ]
     persist(next)
     setName('')
-    setAssignee('Me')
+    setAssignee(roster[0] || '')
   }
 
   function toggleDone(id) {
+    if (editingId === id) setEditingId(null)
     const next = chores.map((c) => {
       if (c.id !== id) return c
       const nextDone = !c.done
@@ -106,7 +99,13 @@ export default function ChoresPage() {
     persist(next)
   }
 
+  function updateChore(id, patch) {
+    const next = chores.map((c) => (c.id === id ? { ...c, ...patch } : c))
+    persist(next)
+  }
+
   function removeChore(id) {
+    if (editingId === id) setEditingId(null)
     persist(chores.filter((c) => c.id !== id))
   }
 
@@ -136,6 +135,7 @@ export default function ChoresPage() {
               <label className="block">
                 <span className="sr-only">Chore name</span>
                 <input
+                  ref={nameInputRef}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Add a chore (e.g., wipe counters, take out trash)"
@@ -152,7 +152,7 @@ export default function ChoresPage() {
                     onChange={(e) => setAssignee(e.target.value)}
                     className="w-full appearance-none rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-10 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
                   >
-                    {ASSIGNEES.map((a) => (
+                    {roster.map((a) => (
                       <option key={a} value={a}>
                         {a}
                       </option>
@@ -206,6 +206,7 @@ export default function ChoresPage() {
                   <button
                     type="button"
                     onClick={() => toggleDone(c.id)}
+                    disabled={editingId === c.id}
                     className="mt-0.5 grid h-6 w-6 place-items-center rounded-full border border-slate-300 bg-white transition hover:border-emerald-400"
                     aria-label={`Mark ${c.name} complete`}
                   >
@@ -213,20 +214,101 @@ export default function ChoresPage() {
                   </button>
 
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-900">{c.name}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Assigned to <span className="font-semibold text-slate-700">{c.assignee}</span>
-                    </p>
+                    {editingId === c.id ? (
+                      <div className="grid gap-2">
+                        <label className="block">
+                          <span className="sr-only">Edit chore name</span>
+                          <input
+                            value={draftName}
+                            onChange={(e) => setDraftName(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="sr-only">Edit assignee</span>
+                          <div className="relative">
+                            <User
+                              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                              aria-hidden="true"
+                            />
+                            <select
+                              value={draftAssignee}
+                              onChange={(e) => setDraftAssignee(e.target.value)}
+                              className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-2 pl-10 pr-9 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                            >
+                              {roster.map((a) => (
+                                <option key={a} value={a}>
+                                  {a}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">▾</div>
+                          </div>
+                        </label>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const trimmed = draftName.trim()
+                              if (!trimmed) return
+                              updateChore(c.id, { name: trimmed, assignee: draftAssignee })
+                              setEditingId(null)
+                            }}
+                            disabled={!draftName.trim()}
+                            className={[
+                              'inline-flex items-center rounded-xl px-3 py-1.5 text-xs font-semibold shadow-sm transition',
+                              draftName.trim()
+                                ? 'bg-slate-900 text-white hover:bg-slate-800'
+                                : 'bg-slate-200 text-slate-500 cursor-not-allowed',
+                            ].join(' ')}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingId(null)}
+                            className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="truncate text-sm font-semibold text-slate-900">{c.name}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Assigned to <span className="font-semibold text-slate-700">{c.assignee}</span>
+                        </p>
+                      </>
+                    )}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => removeChore(c.id)}
-                    className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                    aria-label={`Delete ${c.name}`}
-                  >
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    {editingId !== c.id && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(c.id)
+                          setDraftName(c.name)
+                          setDraftAssignee(c.assignee)
+                        }}
+                        className="rounded-xl px-2 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                        aria-label={`Edit ${c.name}`}
+                      >
+                        Edit
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeChore(c.id)}
+                      className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                      aria-label={`Delete ${c.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
               ))
             )}
