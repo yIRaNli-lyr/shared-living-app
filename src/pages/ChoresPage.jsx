@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Circle, Plus, Trash2, User } from 'lucide-react'
+import { DEFAULT_CHORES, normalizeChore } from '../lib/choresModel'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 
 function Card({ children, className = '' }) {
@@ -18,54 +19,42 @@ function IconBadge({ children, className = '' }) {
   )
 }
 
-const STORAGE_KEY = 'slmvp.chores.v1'
-const ASSIGNEES = ['Me', 'Roommate A', 'Roommate B']
-
 function makeId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
   return `id_${Math.random().toString(16).slice(2)}_${Date.now()}`
 }
 
-function normalizeChore(input) {
-  if (!input || typeof input !== 'object') return null
-  const name = typeof input.name === 'string' ? input.name : ''
-  const assignee = typeof input.assignee === 'string' ? input.assignee : 'Me'
-  const done = Boolean(input.done)
-  const id = typeof input.id === 'string' ? input.id : makeId()
-  const createdAt = typeof input.createdAt === 'number' ? input.createdAt : Date.now()
-  const doneAt = typeof input.doneAt === 'number' ? input.doneAt : null
-  return {
-    id,
-    name: name.trim(),
-    assignee: ASSIGNEES.includes(assignee) ? assignee : 'Me',
-    done,
-    createdAt,
-    doneAt: done ? (doneAt ?? Date.now()) : null,
-  }
-}
-
-const DEFAULT_CHORES = [
-  { id: 'seed_1', name: 'Trash & recycling', assignee: 'Roommate A', done: false, createdAt: Date.now() - 86400000 },
-  { id: 'seed_2', name: 'Kitchen reset', assignee: 'Me', done: false, createdAt: Date.now() - 3600000 },
-  { id: 'seed_3', name: 'Bathroom wipe-down', assignee: 'Roommate B', done: true, createdAt: Date.now() - 172800000, doneAt: Date.now() - 7200000 },
-]
-
-export default function ChoresPage() {
-  const [stored, setStored] = useLocalStorageState(STORAGE_KEY, DEFAULT_CHORES)
+export default function ChoresPage({ storageKey, isDemo, members, focusAddFormNonce = 0 }) {
+  const roster = Array.isArray(members) && members.length ? members : []
+  const [stored, setStored] = useLocalStorageState(storageKey, isDemo ? DEFAULT_CHORES : [])
+  const nameInputRef = useRef(null)
 
   const chores = useMemo(() => {
     const raw = Array.isArray(stored) ? stored : []
-    const normalized = raw.map(normalizeChore).filter(Boolean)
+    const normalized = raw.map((c) => normalizeChore(c, roster)).filter(Boolean)
+    if (!isDemo) return normalized
     const hasSeed = normalized.some((c) => String(c.id).startsWith('seed_'))
-    if (normalized.length === 0 && !hasSeed) return DEFAULT_CHORES.map(normalizeChore).filter(Boolean)
+    if (normalized.length === 0 && !hasSeed) return DEFAULT_CHORES.map((c) => normalizeChore(c, roster)).filter(Boolean)
     return normalized
-  }, [stored])
+  }, [stored, isDemo, roster])
 
   const [name, setName] = useState('')
-  const [assignee, setAssignee] = useState('Me')
+  const [assignee, setAssignee] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [draftName, setDraftName] = useState('')
-  const [draftAssignee, setDraftAssignee] = useState('Me')
+  const [draftAssignee, setDraftAssignee] = useState('')
+
+  useEffect(() => {
+    if (roster.length > 0 && !roster.includes(assignee)) setAssignee(roster[0])
+  }, [roster, assignee])
+
+  useEffect(() => {
+    if (roster.length > 0 && !roster.includes(draftAssignee)) setDraftAssignee(roster[0])
+  }, [roster, draftAssignee])
+
+  useEffect(() => {
+    if (focusAddFormNonce > 0) nameInputRef.current?.focus()
+  }, [focusAddFormNonce])
 
   const pending = useMemo(
     () => chores.filter((c) => !c.done).sort((a, b) => b.createdAt - a.createdAt),
@@ -97,7 +86,7 @@ export default function ChoresPage() {
     ]
     persist(next)
     setName('')
-    setAssignee('Me')
+    setAssignee(roster[0] || '')
   }
 
   function toggleDone(id) {
@@ -146,6 +135,7 @@ export default function ChoresPage() {
               <label className="block">
                 <span className="sr-only">Chore name</span>
                 <input
+                  ref={nameInputRef}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Add a chore (e.g., wipe counters, take out trash)"
@@ -162,7 +152,7 @@ export default function ChoresPage() {
                     onChange={(e) => setAssignee(e.target.value)}
                     className="w-full appearance-none rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-10 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
                   >
-                    {ASSIGNEES.map((a) => (
+                    {roster.map((a) => (
                       <option key={a} value={a}>
                         {a}
                       </option>
@@ -247,7 +237,7 @@ export default function ChoresPage() {
                               onChange={(e) => setDraftAssignee(e.target.value)}
                               className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-2 pl-10 pr-9 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
                             >
-                              {ASSIGNEES.map((a) => (
+                              {roster.map((a) => (
                                 <option key={a} value={a}>
                                   {a}
                                 </option>
