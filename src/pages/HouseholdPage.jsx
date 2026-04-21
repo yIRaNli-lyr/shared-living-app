@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { LogOut, Plus, Trash2, Users } from 'lucide-react'
+import { CalendarDays, LogOut, MessageCircle, Plus, Send, Trash2, Users } from 'lucide-react'
+import { useLocalStorageState } from '../lib/useLocalStorageState'
 import { findRegisteredUsername } from '../lib/authUsers'
 import {
   canActorDeleteHouseholdMember,
@@ -23,6 +24,34 @@ function rosterHasUsernameCI(roster, name) {
   return roster.some((m) => String(m).trim().toLowerCase() === n)
 }
 
+function makeId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return `id_${Math.random().toString(16).slice(2)}_${Date.now()}`
+}
+
+function formatTimeLabel(ts) {
+  try {
+    return new Date(ts).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+  } catch {
+    return ''
+  }
+}
+
+function normalizeChatMessage(input) {
+  if (!input || typeof input !== 'object') return null
+  const id = typeof input.id === 'string' ? input.id : makeId()
+  const sender = typeof input.sender === 'string' && input.sender.trim() ? input.sender.trim() : 'Household member'
+  const text = typeof input.text === 'string' ? input.text.trim() : ''
+  const createdAt = typeof input.createdAt === 'number' ? input.createdAt : Date.now()
+  if (!text) return null
+  return { id, sender, text, createdAt }
+}
+
 export default function HouseholdPage({
   currentUser,
   members,
@@ -44,6 +73,55 @@ export default function HouseholdPage({
   const [cloudBusy, setCloudBusy] = useState(false)
 
   const meta = useMemo(() => (isDemo ? demoHouseholdMeta() : normalizeHouseholdMeta(householdMeta)), [isDemo, householdMeta])
+
+  const chatStorageKey = useMemo(() => {
+    const householdKey = isDemo ? 'demo-household' : meta.owner || currentUser.username || 'household'
+    return `${householdKey}:chat`
+  }, [isDemo, meta.owner, currentUser.username])
+
+  const DEMO_MESSAGES = useMemo(
+    () => [
+      {
+        id: 'demo_msg_1',
+        sender: 'Alex',
+        text: 'I can take out the trash tonight.',
+        createdAt: Date.now() - 1000 * 60 * 90,
+      },
+      {
+        id: 'demo_msg_2',
+        sender: 'Jordan',
+        text: 'Reminder: the internet bill is due this week.',
+        createdAt: Date.now() - 1000 * 60 * 60,
+      },
+      {
+        id: 'demo_msg_3',
+        sender: 'Sam',
+        text: 'Please remember quiet hours after 11 PM.',
+        createdAt: Date.now() - 1000 * 60 * 35,
+      },
+      {
+        id: 'demo_msg_4',
+        sender: 'Taylor',
+        text: 'Let’s do a quick apartment check-in this weekend.',
+        createdAt: Date.now() - 1000 * 60 * 10,
+      },
+    ],
+    [],
+  )
+
+  const [storedMessages, setStoredMessages] = useLocalStorageState(chatStorageKey, isDemo ? DEMO_MESSAGES : [])
+  const [chatInput, setChatInput] = useState('')
+  const [meetingTitle, setMeetingTitle] = useState('')
+  const [meetingDate, setMeetingDate] = useState('')
+  const [meetingTime, setMeetingTime] = useState('')
+
+  const chatMessages = useMemo(() => {
+    const raw = Array.isArray(storedMessages) ? storedMessages : []
+    const normalized = raw.map(normalizeChatMessage).filter(Boolean)
+
+    if (isDemo && normalized.length === 0) return DEMO_MESSAGES
+    return normalized.sort((a, b) => a.createdAt - b.createdAt)
+  }, [storedMessages, isDemo, DEMO_MESSAGES])
 
   const deletable = useMemo(() => {
     const map = {}
@@ -174,6 +252,54 @@ export default function HouseholdPage({
         admins: [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
       }
     })
+  }
+
+  function sendChatMessage(text) {
+    const message = String(text || '').trim()
+    if (!message) return
+    const sender =
+      members.find(
+        (m) => String(m).trim().toLowerCase() === String(currentUser.username).trim().toLowerCase(),
+      ) || currentUser.username || 'You'
+
+    const next = [
+      ...(Array.isArray(chatMessages) ? chatMessages : []),
+      {
+        id: makeId(),
+        sender,
+        text: message,
+        createdAt: Date.now(),
+      },
+    ]
+    setStoredMessages(next)
+  }
+
+  function handleSendMessage(e) {
+    e.preventDefault()
+    if (!chatInput.trim()) return
+    sendChatMessage(chatInput)
+    setChatInput('')
+  }
+
+  function handleSendQuickReminder(type) {
+    const templates = {
+      chores: 'Reminder: please check your assigned chores for today.',
+      bills: 'Reminder: please review unpaid bills and send payment if needed.',
+      rules: 'Reminder: please review the current house rules.',
+      supplies: 'Reminder: please check shared supplies and refill if something is running low.',
+    }
+    sendChatMessage(templates[type] || 'Household reminder.')
+  }
+
+  function handleScheduleMeeting(e) {
+    e.preventDefault()
+    if (!meetingDate || !meetingTime) return
+    const title = meetingTitle.trim() || 'Household meeting'
+    const message = `${title} scheduled for ${meetingDate} at ${meetingTime}.`
+    sendChatMessage(message)
+    setMeetingTitle('')
+    setMeetingDate('')
+    setMeetingTime('')
   }
 
   const roleBadgeClass = (role) => {
@@ -350,6 +476,152 @@ export default function HouseholdPage({
             )
           })}
         </ul>
+      </Card>
+
+      <Card>
+        <div className="flex items-start gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-indigo-600 text-white shadow-sm">
+            <MessageCircle className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-slate-600">Communication</p>
+            <h3 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Household group chat</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Use this space to share reminders, updates, and quick household coordination.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-6 lg:grid-cols-[1.5fr_1fr]">
+          <div className="min-w-0">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
+                {chatMessages.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+                    No messages yet. Start the conversation below.
+                  </div>
+                ) : (
+                  chatMessages.map((msg) => (
+                    <div key={msg.id} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">{msg.sender}</p>
+                        <span className="text-xs text-slate-500">{formatTimeLabel(msg.createdAt)}</span>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-700">{msg.text}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <form onSubmit={handleSendMessage} className="mt-4 flex flex-col gap-3 sm:flex-row">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Write a household message..."
+                  className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                />
+                <button
+                  type="submit"
+                  disabled={!chatInput.trim()}
+                  className={[
+                    'inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold shadow-sm transition',
+                    chatInput.trim()
+                      ? 'bg-slate-900 text-white hover:bg-slate-800'
+                      : 'cursor-not-allowed bg-slate-200 text-slate-500',
+                  ].join(' ')}
+                >
+                  <Send className="h-4 w-4" aria-hidden="true" />
+                  Send
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <h4 className="text-sm font-semibold text-slate-900">Quick reminders</h4>
+              <p className="mt-1 text-sm text-slate-600">
+                Send a simple reminder based on other household tasks.
+              </p>
+              <div className="mt-3 grid gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSendQuickReminder('chores')}
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                >
+                  Remind about chores
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSendQuickReminder('bills')}
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                >
+                  Remind about bills
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSendQuickReminder('rules')}
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                >
+                  Remind about rules
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSendQuickReminder('supplies')}
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                >
+                  Remind about supplies
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-slate-700" aria-hidden="true" />
+                <h4 className="text-sm font-semibold text-slate-900">Schedule offline meeting</h4>
+              </div>
+              <p className="mt-1 text-sm text-slate-600">
+                Set a time for a quick household check-in and send it to the group chat.
+              </p>
+
+              <form onSubmit={handleScheduleMeeting} className="mt-3 space-y-3">
+                <input
+                  value={meetingTitle}
+                  onChange={(e) => setMeetingTitle(e.target.value)}
+                  placeholder="Meeting title (optional)"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <input
+                    type="date"
+                    value={meetingDate}
+                    onChange={(e) => setMeetingDate(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                  />
+                  <input
+                    type="time"
+                    value={meetingTime}
+                    onChange={(e) => setMeetingTime(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={!meetingDate || !meetingTime}
+                  className={[
+                    'inline-flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold shadow-sm transition',
+                    meetingDate && meetingTime
+                      ? 'bg-indigo-600 text-white hover:bg-indigo-500'
+                      : 'cursor-not-allowed bg-slate-200 text-slate-500',
+                  ].join(' ')}
+                >
+                  <CalendarDays className="h-4 w-4" aria-hidden="true" />
+                  Send meeting plan
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
       </Card>
 
       {!isDemo ? (
